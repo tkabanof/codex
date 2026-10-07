@@ -51,8 +51,27 @@ Codex / дочерний процесс
 ```powershell
 py -3.10 -m venv tools\encrypted-temp\.venv
 tools\encrypted-temp\.venv\Scripts\python.exe -m pip install --upgrade pip
-tools\encrypted-temp\.venv\Scripts\python.exe -m pip install -e ".\tools\encrypted-temp[test]"
+tools\encrypted-temp\.venv\Scripts\python.exe -m pip install -e ".\tools\encrypted-temp[test,build]"
+.\tools\encrypted-temp\build-temp-vault.ps1
 ```
+
+Сборка создаёт `tools\encrypted-temp\dist\temp-vault\temp-vault.bin` и каталог
+его библиотек `_internal`. Распространять нужно всю папку `temp-vault`.
+Исполняемый файл службы называется **`temp-vault.bin`**, без `codex` в имени и
+без расширения `.exe`. Это по-прежнему исполняемый PE-файл Windows.
+Сборочный скрипт проверяет запуск именно переименованного файла через
+`CreateProcess` (`UseShellExecute=false`). Промежуточные сборочные файлы `.exe`
+могут оставаться в `build`, но распространяемый файл службы имеет имя `.bin`.
+
+Python встроен в процесс службы через PyInstaller `onedir`; отдельный
+`python.exe` для работы упакованной службы не запускается. Python нужен для
+сборки и тестов. Режим `onefile` не используется, чтобы не распаковывать
+библиотеки при запуске в обычный TEMP.
+
+Старый console entry point удалён из пакета. Если ранее он был установлен,
+сначала удалите старый пакет командой `python.exe -m pip uninstall
+codex-encrypted-temp` через Python этой venv, затем установите новую версию.
+Это уберёт ранее сгенерированный `codex-encrypted-temp.exe`.
 
 ## Запуск
 
@@ -60,13 +79,17 @@ tools\encrypted-temp\.venv\Scripts\python.exe -m pip install -e ".\tools\encrypt
 каталог должен находиться на обычном диске, вне виртуального диска:
 
 ```powershell
-tools\encrypted-temp\.venv\Scripts\codex-encrypted-temp.exe `
-    --backing D:\CodexTempCiphertext --drive T:
+.\tools\encrypted-temp\start-temp-vault.ps1 `
+    -BackingDirectory D:\CodexTempCiphertext -Drive T:
 ```
 
 Служба остаётся запущенной. До её остановки закройте Codex и все дочерние
 программы, использующие этот диск. `Ctrl+C` останавливает службу и снимает диск.
 Принудительное завершение также теряет ключ и все временные данные.
+Не запускайте `.bin` двойным щелчком: скрипт запуска использует прямой запуск
+процесса и не требует регистрации ассоциации расширения.
+Фактическое имя образа процесса проверяет дополнительный Windows-тест ниже;
+на macOS имя процесса Windows подтвердить невозможно.
 
 Во втором PowerShell, из корня репозитория:
 
@@ -158,6 +181,19 @@ tools\encrypted-temp\.venv\Scripts\python.exe -m pytest tools\encrypted-temp -q
 через TEMP. На macOS этот тест **пропускается**, а не имитирует драйвер.
 После него отдельно необходим пробный запуск настоящего Codex с его песочницей
 и инструментами. До этого совместимость с Codex на Windows не подтверждена.
+
+Для проверки упакованного процесса после сборки задайте также:
+
+```powershell
+$env:CODEX_TEMP_TEST_BINARY = (Resolve-Path tools\encrypted-temp\dist\temp-vault\temp-vault.bin).Path
+tools\encrypted-temp\.venv\Scripts\python.exe -m pytest tools\encrypted-temp -q
+```
+
+Тест запускает `.bin`, проверяет путь образа процесса через Windows API,
+ожидает монтирования и проверяет файловые операции. Оба Windows-теста должны
+выполняться последовательно на свободной букве диска. Сам Codex CLI по-прежнему
+может называться `codex.exe`; требование об имени относится к нашей службе
+хранилища. CLI запускается с `--no-daemon`.
 
 Источники API: [WinFSPy](https://github.com/Scille/winfspy),
 [AEAD в cryptography](https://cryptography.io/en/latest/hazmat/primitives/aead/).

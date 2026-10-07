@@ -9,7 +9,7 @@ from .store import StorageFailure, Store
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Mount an ephemeral encrypted temporary drive"
+        prog="temp-vault", description="Mount an ephemeral encrypted temporary drive"
     )
     parser.add_argument(
         "--backing", required=True, help="Directory for ciphertext only"

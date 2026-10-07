@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -63,3 +64,71 @@ def test_real_mount(tmp_path):
         filesystem.stop()
         store.shutdown()
     assert not root.exists()
+
+
+@pytest.mark.skipif(
+    not os.environ.get("CODEX_TEMP_TEST_BINARY"),
+    reason="Requires the packaged temp-vault.bin from build-temp-vault.ps1",
+)
+def test_packaged_service_image_name_and_mount(tmp_path):
+    import ctypes
+    from ctypes import wintypes
+
+    binary = Path(os.environ["CODEX_TEMP_TEST_BINARY"]).resolve(strict=True)
+    assert binary.name == "temp-vault.bin"
+    assert not binary.with_suffix(".exe").exists()
+    drive = os.environ["CODEX_TEMP_TEST_DRIVE"]
+    assert len(drive) == 2 and drive[1] == ":"
+    root = Path(drive + "\\")
+    assert not root.exists(), "Never mount over an existing drive"
+    backing = tmp_path / "ciphertext for packaged service"
+    process = subprocess.Popen(
+        [str(binary), "--backing", str(backing), "--drive", drive],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        kernel.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        handle = kernel.OpenProcess(0x1000, False, process.pid)
+        assert handle, ctypes.WinError(ctypes.get_last_error())
+        try:
+            length = wintypes.DWORD(32768)
+            image = ctypes.create_unicode_buffer(length.value)
+            assert kernel.QueryFullProcessImageNameW(
+                handle, 0, image, ctypes.byref(length)
+            )
+            assert Path(image.value).samefile(binary)
+            assert Path(image.value).name == "temp-vault.bin"
+        finally:
+            kernel.CloseHandle(handle)
+        deadline = time.monotonic() + 30
+        while not root.exists():
+            assert process.poll() is None, "Packaged service exited before mounting"
+            assert time.monotonic() < deadline, "Packaged service mount timed out"
+            time.sleep(0.1)
+        file = root / "packaged-secret.txt"
+        file.write_bytes(b"packaged-service-confidential-payload")
+        assert file.read_bytes() == b"packaged-service-confidential-payload"
+        for encrypted in backing.glob("session-*/*"):
+            raw = encrypted.read_bytes()
+            assert b"packaged-secret.txt" not in raw
+            assert b"packaged-service-confidential-payload" not in raw
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=10)
+    deadline = time.monotonic() + 10
+    while root.exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not root.exists(), "Drive must disappear when its service exits"

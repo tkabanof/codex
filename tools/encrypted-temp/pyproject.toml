@@ -14,9 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8,<9"]
-
-[project.scripts]
-codex-encrypted-temp = "codex_encrypted_temp.__main__:main"
+build = ["pyinstaller>=6.22.1,<7"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
